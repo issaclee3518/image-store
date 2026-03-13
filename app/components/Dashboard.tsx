@@ -92,24 +92,23 @@ export function Dashboard() {
         const items = (listData ?? []).filter(
           (i) => !!i && typeof (i as { name?: string }).name === "string",
         ) as { name: string; id?: string }[];
-        const out: ImageItem[] = [];
-        for (const item of items) {
-          const fullPath = path ? `${path}/${item.name}` : item.name;
-          const isFile = !!(item as { id?: string }).id;
-          if (isFile) {
+        const results = await Promise.all(
+          items.map(async (item) => {
+            const fullPath = path ? `${path}/${item.name}` : item.name;
+            const isFile = !!(item as { id?: string }).id;
+            if (!isFile) return null;
             const { data: urlData } = await supabase.storage
               .from(IMAGES_BUCKET)
               .createSignedUrl(fullPath, SIGNED_URL_EXPIRE_SEC);
-            if (urlData?.signedUrl) {
-              out.push({
-                path: fullPath,
-                url: urlData.signedUrl,
-                name: item.name,
-              });
-            }
-          }
-        }
-        return out;
+            if (!urlData?.signedUrl) return null;
+            return {
+              path: fullPath,
+              url: urlData.signedUrl,
+              name: item.name,
+            } satisfies ImageItem;
+          }),
+        );
+        return results.filter((img): img is ImageItem => img !== null);
       };
 
       if (categoryId === ALL_ID) {
@@ -119,22 +118,28 @@ export function Dashboard() {
         const rootItems = (rootData ?? []).filter(
           (i) => !!i && typeof (i as { name?: string }).name === "string",
         ) as { name: string; id?: string }[];
-        const allImages: ImageItem[] = [];
-        for (const item of rootItems) {
-          const fullPath = `${uid}/${item.name}`;
-          const isFile = !!(item as { id?: string }).id;
-          if (isFile) {
-            const { data: urlData } = await supabase.storage
-              .from(IMAGES_BUCKET)
-              .createSignedUrl(fullPath, SIGNED_URL_EXPIRE_SEC);
-            if (urlData?.signedUrl) {
-              allImages.push({ path: fullPath, url: urlData.signedUrl, name: item.name });
+        const allResults = await Promise.all(
+          rootItems.map(async (item) => {
+            const fullPath = `${uid}/${item.name}`;
+            const isFile = !!(item as { id?: string }).id;
+            if (isFile) {
+              const { data: urlData } = await supabase.storage
+                .from(IMAGES_BUCKET)
+                .createSignedUrl(fullPath, SIGNED_URL_EXPIRE_SEC);
+              if (!urlData?.signedUrl) return [] as ImageItem[];
+              return [
+                {
+                  path: fullPath,
+                  url: urlData.signedUrl,
+                  name: item.name,
+                } satisfies ImageItem,
+              ];
             }
-          } else {
             const inFolder = await listFolder(fullPath);
-            allImages.push(...inFolder);
-          }
-        }
+            return inFolder;
+          }),
+        );
+        const allImages = allResults.flat();
         allImages.sort((a, b) => b.path.localeCompare(a.path));
         return allImages;
       }
