@@ -8,6 +8,7 @@ import { PhotoUploadModal, type CategoryOption } from "./PhotoUploadModal";
 import { ImageLightbox } from "./ImageLightbox";
 import { CreateCategoryModal } from "./CreateCategoryModal";
 import { InteractiveHoverButton } from "./InteractiveHoverButton";
+import { MotionButton } from "./MotionButton";
 
 const SIGNED_URL_EXPIRE_SEC = 3600;
 const ALL_ID = "all";
@@ -261,42 +262,24 @@ export function Dashboard() {
           <h2 className="mb-3 text-xs font-semibold uppercase tracking-wider text-zinc-500">
             카테고리
           </h2>
-          <nav className="flex flex-col gap-0.5">
-            <button
-              type="button"
+          <nav className="flex flex-col gap-1 pr-4">
+            <MotionButton
+              label="전체"
+              active={selectedCategoryId === ALL_ID}
               onClick={() => setSelectedCategoryId(ALL_ID)}
-              className={`rounded-lg px-3 py-2 text-left text-sm transition ${
-                selectedCategoryId === ALL_ID
-                  ? "bg-zinc-100 font-medium text-zinc-900"
-                  : "text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900"
-              }`}
-            >
-              전체
-            </button>
-            <button
-              type="button"
+            />
+            <MotionButton
+              label="미분류"
+              active={selectedCategoryId === UNCATEGORIZED_ID}
               onClick={() => setSelectedCategoryId(UNCATEGORIZED_ID)}
-              className={`rounded-lg px-3 py-2 text-left text-sm transition ${
-                selectedCategoryId === UNCATEGORIZED_ID
-                  ? "bg-zinc-100 font-medium text-zinc-900"
-                  : "text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900"
-              }`}
-            >
-              미분류
-            </button>
+            />
             {categories.map((c) => (
-              <button
+              <MotionButton
                 key={c.id}
-                type="button"
+                label={c.name}
+                active={selectedCategoryId === c.id}
                 onClick={() => setSelectedCategoryId(c.id)}
-                className={`rounded-lg px-3 py-2 text-left text-sm transition ${
-                  selectedCategoryId === c.id
-                    ? "bg-zinc-100 font-medium text-zinc-900"
-                    : "text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900"
-                }`}
-              >
-                {c.name}
-              </button>
+              />
             ))}
           </nav>
           <button
