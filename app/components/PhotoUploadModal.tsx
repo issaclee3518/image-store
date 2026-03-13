@@ -28,6 +28,52 @@ function sanitizeFileName(name: string): string {
 
 const UNCATEGORIZED_ID = "uncategorized";
 
+async function createThumbnailBlob(file: File, maxSize = 480): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const objectUrl = URL.createObjectURL(file);
+
+    img.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        reject(new Error("Canvas not supported"));
+        return;
+      }
+
+      let { width, height } = img;
+      const scale = Math.min(maxSize / width, maxSize / height, 1);
+      width = Math.round(width * scale);
+      height = Math.round(height * scale);
+      canvas.width = width;
+      canvas.height = height;
+
+      ctx.drawImage(img, 0, 0, width, height);
+
+      canvas.toBlob(
+        (blob) => {
+          if (!blob) {
+            reject(new Error("Failed to create thumbnail"));
+          } else {
+            resolve(blob);
+          }
+        },
+        "image/jpeg",
+        0.8,
+      );
+    };
+
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error("Failed to load image"));
+    };
+
+    img.src = objectUrl;
+  });
+}
+
 export function PhotoUploadModal({
   isOpen,
   onClose,
@@ -97,18 +143,27 @@ export function PhotoUploadModal({
       const ext = file.name.split(".").pop() || "jpg";
       const safeName = sanitizeFileName(file.name.replace(/\.[^.]+$/, "")) || "image";
       const path = `${user.id}/${folder}/${baseTime}-${i}-${safeName}.${ext}`;
+      const thumbPath = `${user.id}/${folder}/thumb_${baseTime}-${i}-${safeName}.jpg`;
 
-      const { error: uploadError } = await supabase.storage
-        .from(IMAGES_BUCKET)
-        .upload(path, file, {
+      const thumbnailBlob = await createThumbnailBlob(file);
+
+      const [{ error: uploadError }, { error: thumbError }] = await Promise.all([
+        supabase.storage.from(IMAGES_BUCKET).upload(path, file, {
           contentType: file.type || "image/jpeg",
-          cacheControl: "31536000", // 1 year; served as Cache-Control: max-age=31536000
+          cacheControl: "31536000",
           upsert: false,
-        });
+        }),
+        supabase.storage.from(IMAGES_BUCKET).upload(thumbPath, thumbnailBlob, {
+          contentType: "image/jpeg",
+          cacheControl: "31536000",
+          upsert: false,
+        }),
+      ]);
 
-      if (uploadError) {
+      if (uploadError || thumbError) {
         failed += 1;
-        setError((prev) => (prev ? `${prev}; ` : "") + `${file.name}: ${uploadError.message}`);
+        const message = uploadError?.message ?? thumbError?.message ?? "업로드 실패";
+        setError((prev) => (prev ? `${prev}; ` : "") + `${file.name}: ${message}`);
       } else {
         success += 1;
         const { data: urlData } = await supabase.storage

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import type { User } from "@supabase/supabase-js";
 import { PhotoUploadModal } from "./PhotoUploadModal";
@@ -47,6 +48,12 @@ export function HeroSection() {
               text="사진 올리기"
               className="min-w-[10rem] px-7 py-3"
             />
+            <Link
+              href="/workflow"
+              className="flex items-center justify-center rounded-full border border-zinc-200 bg-white px-7 py-3 text-sm font-medium text-zinc-800 transition hover:border-zinc-300 hover:bg-zinc-50 active:bg-zinc-100"
+            >
+              영상 제작
+            </Link>
           </div>
           <div className="mt-4 flex flex-wrap gap-4 text-xs text-zinc-500">
             <span>무료로 시작</span>

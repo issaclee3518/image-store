@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { IMAGES_BUCKET } from "@/lib/supabase/storage";
 import type { User } from "@supabase/supabase-js";
@@ -17,7 +18,14 @@ const SIDEBAR_MIN = 180;
 const SIDEBAR_MAX = 420;
 const SIDEBAR_DEFAULT = 224;
 
-type ImageItem = { path: string; url: string; name: string; categoryId?: string };
+type ImageItem = {
+  path: string;
+  url: string;
+  thumbUrl?: string;
+  thumbPath?: string; // storage path for thumbnail, for delete
+  name: string;
+  categoryId?: string;
+};
 
 type CategoryRow = { id: string; name: string };
 
@@ -92,22 +100,46 @@ export function Dashboard() {
         const items = (listData ?? []).filter(
           (i) => !!i && typeof (i as { name?: string }).name === "string",
         ) as { name: string; id?: string }[];
-        const results = await Promise.all(
-          items.map(async (item) => {
+
+        const originals = items.filter((item) => !item.name.startsWith("thumb_"));
+        const thumbs = items.filter((item) => item.name.startsWith("thumb_"));
+
+        const thumbMap = new Map<string, { name: string; id?: string }>();
+        for (const t of thumbs) {
+          const baseName = t.name.replace(/^thumb_/, "");
+          thumbMap.set(baseName, t);
+        }
+
+        const results: (ImageItem | null)[] = await Promise.all(
+          originals.map(async (item) => {
             const fullPath = path ? `${path}/${item.name}` : item.name;
-            const isFile = !!(item as { id?: string }).id;
-            if (!isFile) return null;
-            const { data: urlData } = await supabase.storage
-              .from(IMAGES_BUCKET)
-              .createSignedUrl(fullPath, SIGNED_URL_EXPIRE_SEC);
-            if (!urlData?.signedUrl) return null;
+            const thumbItem = thumbMap.get(item.name);
+            const thumbPath =
+              thumbItem && (path ? `${path}/${thumbItem.name}` : thumbItem.name);
+
+            const [origUrlData, thumbUrlData] = await Promise.all([
+              supabase.storage
+                .from(IMAGES_BUCKET)
+                .createSignedUrl(fullPath, SIGNED_URL_EXPIRE_SEC),
+              thumbPath
+                ? supabase.storage
+                    .from(IMAGES_BUCKET)
+                    .createSignedUrl(thumbPath, SIGNED_URL_EXPIRE_SEC)
+                : Promise.resolve({ data: null }),
+            ]);
+
+            if (!origUrlData.data?.signedUrl) return null;
+
             return {
               path: fullPath,
-              url: urlData.signedUrl,
+              url: origUrlData.data.signedUrl,
+              thumbUrl: (thumbUrlData as any)?.data?.signedUrl as string | undefined,
+              thumbPath: thumbPath ?? undefined,
               name: item.name,
             } satisfies ImageItem;
           }),
         );
+
         return results.filter((img): img is ImageItem => img !== null);
       };
 
@@ -123,6 +155,7 @@ export function Dashboard() {
             const fullPath = `${uid}/${item.name}`;
             const isFile = !!(item as { id?: string }).id;
             if (isFile) {
+              // 루트에 직접 올라간 파일(옛 데이터)은 썸네일 없이 원본만 사용
               const { data: urlData } = await supabase.storage
                 .from(IMAGES_BUCKET)
                 .createSignedUrl(fullPath, SIGNED_URL_EXPIRE_SEC);
@@ -252,6 +285,24 @@ export function Dashboard() {
     setUploadOpen(false);
   }
 
+  async function handleDeleteImage(img: ImageItem) {
+    if (!window.confirm("삭제하시겠습니까?")) return;
+    const pathsToRemove = [img.path, img.thumbPath].filter(Boolean) as string[];
+    const { error } = await supabase.storage.from(IMAGES_BUCKET).remove(pathsToRemove);
+    if (error) {
+      alert("삭제에 실패했어요. " + error.message);
+      return;
+    }
+    setImages((prev) => prev.filter((i) => i.path !== img.path));
+    setImageCache((prev) => {
+      const next = { ...prev };
+      for (const key of Object.keys(next)) {
+        next[key] = (next[key] ?? []).filter((i) => i.path !== img.path);
+      }
+      return next;
+    });
+  }
+
   const categoryOptions: CategoryOption[] = categories.map((c) => ({ id: c.id, name: c.name }));
 
   if (!user) return null;
@@ -323,12 +374,20 @@ export function Dashboard() {
                   ? "미분류"
                   : categories.find((c) => c.id === selectedCategoryId)?.name ?? "사진"}
             </h1>
-            <InteractiveHoverButton
-              type="button"
-              onClick={() => setUploadOpen(true)}
-              text="추가"
-              className="min-w-[8rem] px-6 py-2.5"
-            />
+            <div className="flex flex-wrap items-center gap-3">
+              <Link
+                href="/workflow"
+                className="rounded-full border border-zinc-200 bg-white px-5 py-2.5 text-sm font-medium text-zinc-700 transition hover:bg-zinc-50"
+              >
+                영상 제작
+              </Link>
+              <InteractiveHoverButton
+                type="button"
+                onClick={() => setUploadOpen(true)}
+                text="추가"
+                className="min-w-[8rem] px-6 py-2.5"
+              />
+            </div>
           </div>
 
           {loading ? (
@@ -352,7 +411,7 @@ export function Dashboard() {
               {images.map((img) => (
                 <li
                   key={img.path}
-                  className="group aspect-square cursor-pointer overflow-hidden rounded-xl bg-zinc-100"
+                  className="group relative aspect-square cursor-pointer overflow-hidden rounded-xl bg-zinc-100"
                   onClick={() => setLightboxUrl(img.url)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" || e.key === " ") {
@@ -365,10 +424,23 @@ export function Dashboard() {
                   aria-label="사진 크게 보기"
                 >
                   <img
-                    src={img.url}
+                    src={img.thumbUrl ?? img.url}
                     alt=""
                     className="h-full w-full object-cover transition-transform duration-300 ease-out group-hover:scale-105"
                   />
+                  <button
+                    type="button"
+                    className="absolute right-1.5 top-1.5 flex h-7 w-7 items-center justify-center rounded-full bg-black/50 text-white opacity-0 transition-opacity group-hover:opacity-100 hover:bg-black/70"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDeleteImage(img);
+                    }}
+                    aria-label="사진 삭제"
+                  >
+                    <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
                 </li>
               ))}
             </ul>
