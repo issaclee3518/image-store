@@ -1,11 +1,21 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { createClient } from "@/lib/supabase/client";
+import type { User } from "@supabase/supabase-js";
 import { PhotoUploadModal } from "./PhotoUploadModal";
 import { InteractiveHoverButton } from "./InteractiveHoverButton";
+import { LoginModal } from "./LoginModal";
 
 export function HeroSection() {
   const [uploadOpen, setUploadOpen] = useState(false);
+  const [loginOpen, setLoginOpen] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
+  const supabase = createClient();
+
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data: { user: u } }) => setUser(u ?? null));
+  }, [supabase]);
 
   return (
     <>
@@ -27,16 +37,16 @@ export function HeroSection() {
           <div className="mt-2 flex flex-wrap items-center gap-4">
             <InteractiveHoverButton
               type="button"
-              onClick={() => setUploadOpen(true)}
-              text="갤러리에서 올리기"
+              onClick={() => {
+                if (user) {
+                  setUploadOpen(true);
+                } else {
+                  setLoginOpen(true);
+                }
+              }}
+              text="사진 올리기"
               className="min-w-[10rem] px-7 py-3"
             />
-            <button
-              type="button"
-              className="flex items-center justify-center rounded-full border border-zinc-200 px-7 py-3 text-sm font-medium text-zinc-800 transition hover:border-zinc-300 hover:bg-zinc-50 active:bg-zinc-100"
-            >
-              갤러리 둘러보기
-            </button>
           </div>
           <div className="mt-4 flex flex-wrap gap-4 text-xs text-zinc-500">
             <span>무료로 시작</span>
@@ -69,6 +79,14 @@ export function HeroSection() {
         isOpen={uploadOpen}
         onClose={() => setUploadOpen(false)}
         onSuccess={() => setUploadOpen(false)}
+      />
+      <LoginModal
+        isOpen={loginOpen}
+        onClose={() => setLoginOpen(false)}
+        onSuccess={() => {
+          setLoginOpen(false);
+          supabase.auth.getUser().then(({ data: { user: u } }) => setUser(u ?? null));
+        }}
       />
     </>
   );

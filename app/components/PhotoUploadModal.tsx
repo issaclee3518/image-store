@@ -7,10 +7,17 @@ import type { User } from "@supabase/supabase-js";
 
 export type CategoryOption = { id: string; name: string };
 
+type UploadedImage = {
+  path: string;
+  url: string;
+  name: string;
+  categoryId: string;
+};
+
 type PhotoUploadModalProps = {
   isOpen: boolean;
   onClose: () => void;
-  onSuccess?: () => void;
+  onSuccess?: (uploaded: UploadedImage[]) => void;
   categories?: CategoryOption[];
   selectedCategoryId?: string | null;
 };
@@ -81,6 +88,7 @@ export function PhotoUploadModal({
     setUploading(true);
     let success = 0;
     let failed = 0;
+    const uploadedItems: UploadedImage[] = [];
 
     const folder = categoryId === UNCATEGORIZED_ID ? "uncategorized" : categoryId;
     const baseTime = Date.now();
@@ -94,6 +102,7 @@ export function PhotoUploadModal({
         .from(IMAGES_BUCKET)
         .upload(path, file, {
           contentType: file.type || "image/jpeg",
+          cacheControl: "31536000", // 1 year; served as Cache-Control: max-age=31536000
           upsert: false,
         });
 
@@ -102,6 +111,17 @@ export function PhotoUploadModal({
         setError((prev) => (prev ? `${prev}; ` : "") + `${file.name}: ${uploadError.message}`);
       } else {
         success += 1;
+        const { data: urlData } = await supabase.storage
+          .from(IMAGES_BUCKET)
+          .createSignedUrl(path, 3600);
+        if (urlData?.signedUrl) {
+          uploadedItems.push({
+            path,
+            url: urlData.signedUrl,
+            name: file.name,
+            categoryId: categoryId === UNCATEGORIZED_ID ? UNCATEGORIZED_ID : categoryId,
+          });
+        }
       }
     }
 
@@ -109,7 +129,7 @@ export function PhotoUploadModal({
     setResult({ success, failed });
     if (success > 0) {
       setFiles([]);
-      onSuccess?.();
+      onSuccess?.(uploadedItems);
     }
   }
 

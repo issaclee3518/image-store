@@ -16,7 +16,7 @@ const SIDEBAR_MIN = 180;
 const SIDEBAR_MAX = 420;
 const SIDEBAR_DEFAULT = 224;
 
-type ImageItem = { path: string; url: string; name: string };
+type ImageItem = { path: string; url: string; name: string; categoryId?: string };
 
 type CategoryRow = { id: string; name: string };
 
@@ -25,6 +25,7 @@ export function Dashboard() {
   const [categories, setCategories] = useState<CategoryRow[]>([]);
   const [selectedCategoryId, setSelectedCategoryId] = useState<string>(ALL_ID);
   const [images, setImages] = useState<ImageItem[]>([]);
+  const [imageCache, setImageCache] = useState<Record<string, ImageItem[]>>({});
   const [loading, setLoading] = useState(true);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [createCategoryOpen, setCreateCategoryOpen] = useState(false);
@@ -81,7 +82,7 @@ export function Dashboard() {
   );
 
   const fetchImages = useCallback(
-    async (uid: string, categoryId: string) => {
+    async (uid: string, categoryId: string): Promise<ImageItem[]> => {
       const listFolder = async (path: string): Promise<ImageItem[]> => {
         const { data: listData, error: listError } = await supabase.storage
           .from(IMAGES_BUCKET)
@@ -134,8 +135,7 @@ export function Dashboard() {
           }
         }
         allImages.sort((a, b) => b.path.localeCompare(a.path));
-        setImages(allImages);
-        return;
+        return allImages;
       }
 
       if (categoryId === UNCATEGORIZED_ID) {
@@ -143,12 +143,15 @@ export function Dashboard() {
         const uncategorizedFolder = await listFolder(`${uid}/uncategorized`);
         const merged = [...rootFiles, ...uncategorizedFolder];
         merged.sort((a, b) => b.path.localeCompare(a.path));
-        setImages(merged);
-        return;
+        return merged.map((img) => ({
+          ...img,
+          // Treat everything shown here as uncategorized for incremental updates
+          categoryId: UNCATEGORIZED_ID,
+        }));
       }
 
       const list = await listFolder(`${uid}/${categoryId}`);
-      setImages(list);
+      return list.map((img) => ({ ...img, categoryId }));
     },
     [supabase],
   );
@@ -157,7 +160,9 @@ export function Dashboard() {
     async (u: User) => {
       setLoading(true);
       await fetchCategories(u.id);
-      await fetchImages(u.id, selectedCategoryId);
+      const list = await fetchImages(u.id, selectedCategoryId);
+      setImages(list);
+      setImageCache((prev) => ({ ...prev, [selectedCategoryId]: list }));
       setLoading(false);
     },
     [fetchCategories, fetchImages, selectedCategoryId],
@@ -185,9 +190,20 @@ export function Dashboard() {
 
   useEffect(() => {
     if (!user) return;
+    const cached = imageCache[selectedCategoryId];
+    if (cached) {
+      setImages(cached);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
-    fetchImages(user.id, selectedCategoryId).finally(() => setLoading(false));
-  }, [user, fetchImages, selectedCategoryId]);
+    fetchImages(user.id, selectedCategoryId)
+      .then((list) => {
+        setImages(list);
+        setImageCache((prev) => ({ ...prev, [selectedCategoryId]: list }));
+      })
+      .finally(() => setLoading(false));
+  }, [user, fetchImages, selectedCategoryId, imageCache]);
 
   async function handleCreateCategory(name: string) {
     if (!user) return;
@@ -199,10 +215,33 @@ export function Dashboard() {
     await fetchCategories(user.id);
   }
 
-  function handleUploadSuccess() {
-    if (user) {
-      setLoading(true);
-      fetchImages(user.id, selectedCategoryId).finally(() => setLoading(false));
+  function handleUploadSuccess(
+    uploaded: { path: string; url: string; name: string; categoryId: string }[] = [],
+  ) {
+    if (uploaded.length > 0) {
+      setImages((prev) => {
+        const visible = uploaded.filter((img) => {
+          if (selectedCategoryId === ALL_ID) return true;
+          if (selectedCategoryId === UNCATEGORIZED_ID) {
+            return img.categoryId === UNCATEGORIZED_ID;
+          }
+          return img.categoryId === selectedCategoryId;
+        });
+        if (visible.length === 0) return prev;
+        return [...visible, ...prev];
+      });
+      // 캐시에도 반영해서 다시 카테고리 이동해도 재요청을 최소화
+      setImageCache((prev) => {
+        const next = { ...prev };
+        // ALL 카테고리 캐시
+        next[ALL_ID] = [...(next[ALL_ID] ?? []), ...uploaded];
+        // 각 개별 카테고리/미분류 캐시
+        for (const img of uploaded) {
+          const key = img.categoryId === UNCATEGORIZED_ID ? UNCATEGORIZED_ID : img.categoryId;
+          next[key] = [img, ...(next[key] ?? [])];
+        }
+        return next;
+      });
     }
     setUploadOpen(false);
   }
