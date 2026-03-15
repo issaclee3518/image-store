@@ -10,6 +10,7 @@ import {
   Download,
   ImagePlus,
   Music,
+  Play,
   Plus,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
@@ -152,8 +153,12 @@ export function WorkflowBuilder({ userId }: { userId: string }) {
   const [previewNextIndex, setPreviewNextIndex] = useState(0);
   const [previewTransitioning, setPreviewTransitioning] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  /** 영상 제작 진행률 0–100, null이면 비표시 */
+  const [downloadProgress, setDownloadProgress] = useState<number | null>(null);
   /** 완성된 영상 Blob; 사용자가 '다운로드' 버튼을 눌렀을 때만 저장 (사용자 제스처) */
   const [downloadReady, setDownloadReady] = useState<{ blob: Blob; filename: string } | null>(null);
+  /** 미리보기 한 바퀴 재생 후 정지 여부; true면 '다시 재생' 버튼 표시 */
+  const [previewEnded, setPreviewEnded] = useState(false);
   const previewIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const previewTransitionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [contentSize, setContentSize] = useState(() => ({
@@ -189,7 +194,8 @@ export function WorkflowBuilder({ userId }: { userId: string }) {
       return;
     }
     if (!el) return;
-    el.src = `/api/jamendo/audio/${encodeURIComponent(selectedBgm.id)}`;
+    // Use direct Jamendo URL for preview to avoid proxy 502; export still uses /api/jamendo/audio
+    el.src = selectedBgm.audio;
     el.loop = true;
     const play = () => {
       el.play().catch(() => {
@@ -352,19 +358,31 @@ export function WorkflowBuilder({ userId }: { userId: string }) {
     setPreviewIndex(0);
     setPreviewNextIndex(0);
     setPreviewTransitioning(false);
+    setPreviewEnded(false);
   }, [orderedPhotoNodes.length]);
 
   useEffect(() => {
-    if (orderedPhotoNodes.length <= 1) return;
+    if (orderedPhotoNodes.length <= 1 || previewEnded) return;
     previewIntervalRef.current = setInterval(() => {
-      setPreviewNextIndex((i) => (i + 1) % orderedPhotoNodes.length);
-      setPreviewTransitioning(true);
+      setPreviewNextIndex((i) => {
+        const next = i + 1;
+        if (next >= orderedPhotoNodes.length) {
+          if (previewIntervalRef.current) {
+            clearInterval(previewIntervalRef.current);
+            previewIntervalRef.current = null;
+          }
+          setPreviewEnded(true);
+          return i;
+        }
+        setPreviewTransitioning(true);
+        return next;
+      });
     }, PREVIEW_DURATION_MS);
     return () => {
       if (previewIntervalRef.current) clearInterval(previewIntervalRef.current);
       if (previewTransitionTimeoutRef.current) clearTimeout(previewTransitionTimeoutRef.current);
     };
-  }, [orderedPhotoNodes.length]);
+  }, [orderedPhotoNodes.length, previewEnded]);
 
   useEffect(() => {
     if (!previewTransitioning || orderedPhotoNodes.length <= 1) return;
@@ -385,6 +403,7 @@ export function WorkflowBuilder({ userId }: { userId: string }) {
       const mp4Native = format === "mp4" && MediaRecorder.isTypeSupported("video/mp4");
       const recordAsWebm = format === "webm" || !mp4Native; // MP4 요청이어도 미지원 시 WebM으로 녹화 후 변환
       setDownloading(true);
+      setDownloadProgress(0);
       let audioSource: AudioBufferSourceNode | null = null;
       let audioCtx: AudioContext | null = null;
       try {
@@ -418,9 +437,18 @@ export function WorkflowBuilder({ userId }: { userId: string }) {
         let stream: MediaStream = videoStream;
 
         if (selectedBgm?.id) {
-          const audioRes = await fetch(`/api/jamendo/audio/${encodeURIComponent(selectedBgm.id)}`);
-          if (!audioRes.ok) throw new Error("BGM을 불러올 수 없어요.");
-          const arrayBuffer = await audioRes.arrayBuffer();
+          let arrayBuffer: ArrayBuffer;
+          const proxyUrl = `/api/jamendo/audio/${encodeURIComponent(selectedBgm.id)}`;
+          const audioRes = await fetch(proxyUrl);
+          if (audioRes.ok) {
+            arrayBuffer = await audioRes.arrayBuffer();
+          } else if (selectedBgm.audio) {
+            const directRes = await fetch(selectedBgm.audio, { mode: "cors" });
+            if (!directRes.ok) throw new Error("BGM을 불러올 수 없어요.");
+            arrayBuffer = await directRes.arrayBuffer();
+          } else {
+            throw new Error("BGM을 불러올 수 없어요.");
+          }
           audioCtx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
           const decoded = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
           const dest = audioCtx.createMediaStreamDestination();
@@ -465,6 +493,7 @@ export function WorkflowBuilder({ userId }: { userId: string }) {
             if (format === "mp4" && recordAsWebm) alert("MP4 변환에 실패했어요. WebM으로 다시 시도해 주세요.");
           } finally {
             setDownloading(false);
+            setDownloadProgress(null);
           }
         };
 
@@ -486,6 +515,8 @@ export function WorkflowBuilder({ userId }: { userId: string }) {
 
       function draw() {
         const elapsed = (performance.now() - startTime) / 1000;
+        const percent = Math.min(100, Math.round((elapsed / totalDuration) * 100));
+        setDownloadProgress(percent);
         if (elapsed >= totalDuration) {
           if (audioSource) {
             try {
@@ -521,6 +552,7 @@ export function WorkflowBuilder({ userId }: { userId: string }) {
       console.error(err);
       alert("영상 만들기에 실패했어요. 이미지 주소가 만료됐거나 CORS 제한일 수 있어요.");
       setDownloading(false);
+      setDownloadProgress(null);
     }
   },
     [orderedPhotoNodes, selectedBgm],
@@ -536,6 +568,13 @@ export function WorkflowBuilder({ userId }: { userId: string }) {
     URL.revokeObjectURL(a.href);
     setDownloadReady(null);
   }, [downloadReady]);
+
+  const handlePreviewReplay = useCallback(() => {
+    setPreviewIndex(0);
+    setPreviewNextIndex(0);
+    setPreviewTransitioning(false);
+    setPreviewEnded(false);
+  }, []);
 
   const handleDragStart = (nodeId: string) => {
     setDraggingNodeId(nodeId);
@@ -736,9 +775,22 @@ export function WorkflowBuilder({ userId }: { userId: string }) {
               )}
             </div>
             {orderedPhotoNodes.length > 1 && (
-              <p className="mt-2 text-center text-xs text-zinc-500">
-                {previewIndex + 1} / {orderedPhotoNodes.length} (자동 재생)
-              </p>
+              <div className="mt-2 flex items-center justify-center gap-2">
+                <p className="text-center text-xs text-zinc-500">
+                  {previewIndex + 1} / {orderedPhotoNodes.length}
+                  {previewEnded ? "" : " (자동 재생)"}
+                </p>
+                {previewEnded && (
+                  <button
+                    type="button"
+                    onClick={handlePreviewReplay}
+                    className="flex items-center gap-1 rounded-lg border border-emerald-500 bg-emerald-500 px-2.5 py-1 text-xs font-medium text-white transition hover:bg-emerald-600"
+                  >
+                    <Play className="h-3.5 w-3.5" />
+                    다시 재생
+                  </button>
+                )}
+              </div>
             )}
             <div className="mt-4 space-y-2">
               <div className="flex items-center justify-between gap-2">
@@ -768,6 +820,20 @@ export function WorkflowBuilder({ userId }: { userId: string }) {
                 )}
               </div>
               <div className="flex flex-col gap-2">
+                {downloadProgress !== null && (
+                  <div className="flex flex-col gap-1.5">
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="font-medium text-emerald-600">제작 중</span>
+                      <span className="font-semibold tabular-nums text-emerald-600">{downloadProgress}%</span>
+                    </div>
+                    <div className="h-2 w-full overflow-hidden rounded-full bg-zinc-200">
+                      <div
+                        className="h-full rounded-full bg-emerald-500 transition-[width] duration-150"
+                        style={{ width: `${downloadProgress}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
                 {downloadReady ? (
                   <button
                     type="button"

@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 export const runtime = "edge";
 
 const JAMENDO_BASE = "https://api.jamendo.com/v3.0/tracks";
+const FETCH_TIMEOUT_MS = 55_000;
 
 export async function GET(
   _request: NextRequest,
@@ -21,10 +22,16 @@ export async function GET(
     return NextResponse.json({ error: "trackId required" }, { status: 400 });
   }
 
+  const timeoutSignal = AbortSignal.timeout(FETCH_TIMEOUT_MS);
+
   try {
     const trackRes = await fetch(
       `${JAMENDO_BASE}/?client_id=${encodeURIComponent(clientId)}&format=json&limit=1&id=${encodeURIComponent(trackId)}`,
-      { headers: { Accept: "application/json" }, next: { revalidate: 3600 } }
+      {
+        headers: { Accept: "application/json" },
+        next: { revalidate: 3600 },
+        signal: timeoutSignal,
+      }
     );
     if (!trackRes.ok) {
       return NextResponse.json(
@@ -43,6 +50,7 @@ export async function GET(
     const audioRes = await fetch(audioUrl, {
       headers: { Accept: "audio/mpeg, audio/*" },
       cache: "no-store",
+      signal: timeoutSignal,
     });
     if (!audioRes.ok) {
       return NextResponse.json(
@@ -52,13 +60,13 @@ export async function GET(
     }
 
     const contentType = audioRes.headers.get("content-type") ?? "audio/mpeg";
-    const contentLength = audioRes.headers.get("content-length");
+    const buffer = await audioRes.arrayBuffer();
     const headers = new Headers({
       "Content-Type": contentType,
       "Cache-Control": "private, max-age=3600",
+      "Content-Length": String(buffer.byteLength),
     });
-    if (contentLength) headers.set("Content-Length", contentLength);
-    return new NextResponse(audioRes.body, { headers });
+    return new NextResponse(buffer, { headers });
   } catch (err) {
     console.error("Jamendo audio proxy error:", err);
     return NextResponse.json(
