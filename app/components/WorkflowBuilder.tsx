@@ -8,8 +8,10 @@ import Link from "next/link";
 import {
   ArrowRight,
   Database,
+  Download,
   ImagePlus,
   Mail,
+  Music,
   Plus,
   Settings,
   Webhook,
@@ -91,12 +93,78 @@ function WorkflowConnectionLine({
 
 type ImageOption = { path: string; url: string; name: string };
 
+/** Jamendo BGM track for workflow */
+export type BgmTrack = { id: string; name: string; artist_name: string; audio: string };
+
+const PREVIEW_DURATION_MS = 2500;
+const CROSSFADE_DURATION_MS = 700;
+const WORKFLOW_STORAGE_KEY = "image-store-workflow";
+
+type SerializedNode = Pick<WorkflowNode, "id" | "type" | "title" | "description" | "color" | "position" | "imagePath">;
+
+function serializeNodes(nodes: WorkflowNode[]): SerializedNode[] {
+  return nodes.map(({ id, type, title, description, color, position, imagePath }) => ({
+    id,
+    type,
+    title,
+    description,
+    color,
+    position,
+    imagePath,
+  }));
+}
+
+function deserializeToNode(s: SerializedNode, imageUrl?: string): WorkflowNode {
+  return { ...s, icon: ImagePlus, imageUrl };
+}
+
+function getOrderedPhotoNodes(nodes: WorkflowNode[], connections: WorkflowConnection[]): WorkflowNode[] {
+  const withPhoto = nodes.filter((n) => n.imageUrl);
+  if (withPhoto.length === 0) return [];
+  if (connections.length === 0) return [...withPhoto].sort((a, b) => a.position.x - b.position.x);
+
+  const toMap = new Map<string, string[]>();
+  const fromSet = new Set<string>();
+  connections.forEach((c) => {
+    toMap.set(c.from, (toMap.get(c.from) ?? []).concat(c.to));
+    fromSet.add(c.to);
+  });
+  const roots = nodes.filter((n) => !fromSet.has(n.id)).sort((a, b) => a.position.x - b.position.x);
+  const ordered: WorkflowNode[] = [];
+  const visited = new Set<string>();
+  function visit(id: string) {
+    if (visited.has(id)) return;
+    visited.add(id);
+    const node = nodes.find((n) => n.id === id);
+    if (node) ordered.push(node);
+    const next = (toMap.get(id) ?? []).sort((a, b) => {
+      const na = nodes.find((n) => n.id === a);
+      const nb = nodes.find((n) => n.id === b);
+      return (na?.position.x ?? 0) - (nb?.position.x ?? 0);
+    });
+    next.forEach(visit);
+  }
+  roots.forEach((r) => visit(r.id));
+  return ordered.filter((n) => n.imageUrl);
+}
+
 export function WorkflowBuilder({ userId }: { userId: string }) {
   const [nodes, setNodes] = useState<WorkflowNode[]>(initialNodes);
   const [connections, setConnections] = useState<WorkflowConnection[]>(initialConnections);
   const canvasRef = useRef<HTMLDivElement>(null);
   const dragStartPosition = useRef<{ x: number; y: number } | null>(null);
+  const [viewportOffset, setViewportOffset] = useState({ x: 0, y: 0 });
+  const [isPanning, setIsPanning] = useState(false);
+  const panStartRef = useRef<{ x: number; y: number } | null>(null);
+  const panStartOffsetRef = useRef<{ x: number; y: number } | null>(null);
+  const [zoom, setZoom] = useState(1);
   const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null);
+  const [previewIndex, setPreviewIndex] = useState(0);
+  const [previewNextIndex, setPreviewNextIndex] = useState(0);
+  const [previewTransitioning, setPreviewTransitioning] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+  const previewIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const previewTransitionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [contentSize, setContentSize] = useState(() => ({
     width: initialNodes.length
       ? Math.max(...initialNodes.map((n) => n.position.x + NODE_WIDTH)) + 50
@@ -109,8 +177,106 @@ export function WorkflowBuilder({ userId }: { userId: string }) {
   const [photoPickerOpen, setPhotoPickerOpen] = useState<string | "add" | null>(null);
   const [photoOptions, setPhotoOptions] = useState<ImageOption[]>([]);
   const [photoPickerLoading, setPhotoPickerLoading] = useState(false);
+  const [restored, setRestored] = useState(false);
+  /** BGM from Jamendo; persisted with workflow */
+  const [selectedBgm, setSelectedBgm] = useState<BgmTrack | null>(null);
+  const [musicPickerOpen, setMusicPickerOpen] = useState(false);
+  const [musicSearch, setMusicSearch] = useState("");
+  const [musicResults, setMusicResults] = useState<BgmTrack[]>([]);
+  const [musicLoading, setMusicLoading] = useState(false);
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
 
   const supabase = createClient();
+
+  useEffect(() => {
+    const el = previewAudioRef.current;
+    if (!selectedBgm) {
+      if (el) {
+        el.pause();
+        el.removeAttribute("src");
+      }
+      return;
+    }
+    if (!el) return;
+    el.src = `/api/jamendo/audio/${encodeURIComponent(selectedBgm.id)}`;
+    el.loop = true;
+    const play = () => {
+      el.play().catch(() => {
+        // Autoplay may be blocked; user can click BGM again or use controls
+      });
+    };
+    play();
+    return () => {
+      el.pause();
+      el.removeAttribute("src");
+    };
+  }, [selectedBgm]);
+
+  useEffect(() => {
+    if (restored) return;
+    try {
+      const raw = typeof window !== "undefined" ? localStorage.getItem(`${WORKFLOW_STORAGE_KEY}-${userId}`) : null;
+      if (!raw) {
+        setRestored(true);
+        return;
+      }
+      const data = JSON.parse(raw) as {
+        nodes: SerializedNode[];
+        connections: WorkflowConnection[];
+        bgmTrack?: BgmTrack;
+      };
+      if (!Array.isArray(data.nodes) || !Array.isArray(data.connections)) {
+        setRestored(true);
+        return;
+      }
+      if (data.bgmTrack && typeof data.bgmTrack === "object" && data.bgmTrack.id && data.bgmTrack.audio) {
+        setSelectedBgm(data.bgmTrack);
+      }
+      (async () => {
+        try {
+          const withUrls = await Promise.all(
+            data.nodes.map(async (s) => {
+              let imageUrl: string | undefined;
+              if (s.imagePath) {
+                const { data: urlData } = await supabase.storage
+                  .from(IMAGES_BUCKET)
+                  .createSignedUrl(s.imagePath, SIGNED_URL_EXPIRE_SEC);
+                imageUrl = urlData?.signedUrl;
+              }
+              return deserializeToNode(s, imageUrl);
+            })
+          );
+          setNodes(withUrls);
+          setConnections(data.connections);
+          if (withUrls.length > 0) {
+            const maxX = Math.max(...withUrls.map((n) => n.position.x + NODE_WIDTH)) + 50;
+            const maxY = Math.max(...withUrls.map((n) => n.position.y + NODE_HEIGHT)) + 50;
+            setContentSize((prev) => ({ width: Math.max(prev.width, maxX), height: Math.max(prev.height, maxY) }));
+          }
+        } finally {
+          setRestored(true);
+        }
+      })();
+    } catch {
+      setRestored(true);
+    }
+  }, [userId, supabase, restored]);
+
+  useEffect(() => {
+    if (!restored) return;
+    try {
+      localStorage.setItem(
+        `${WORKFLOW_STORAGE_KEY}-${userId}`,
+        JSON.stringify({
+          nodes: serializeNodes(nodes),
+          connections,
+          bgmTrack: selectedBgm ?? undefined,
+        })
+      );
+    } catch {
+      // ignore
+    }
+  }, [userId, restored, nodes, connections, selectedBgm]);
 
   const loadUserImages = useCallback(async () => {
     setPhotoPickerLoading(true);
@@ -156,6 +322,183 @@ export function WorkflowBuilder({ userId }: { userId: string }) {
     if (photoPickerOpen) loadUserImages();
   }, [photoPickerOpen, loadUserImages]);
 
+  const searchJamendo = useCallback(async (query: string) => {
+    setMusicLoading(true);
+    try {
+      const params = new URLSearchParams({ limit: "20" });
+      if (query.trim()) params.set("search", query.trim());
+      const res = await fetch(`/api/jamendo/tracks?${params.toString()}`);
+      if (!res.ok) throw new Error("Failed to fetch tracks");
+      const data = (await res.json()) as { tracks?: BgmTrack[] };
+      setMusicResults(data.tracks ?? []);
+    } catch {
+      setMusicResults([]);
+    } finally {
+      setMusicLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!musicPickerOpen) return;
+    const timer = setTimeout(() => searchJamendo(musicSearch), 300);
+    return () => clearTimeout(timer);
+  }, [musicPickerOpen, musicSearch, searchJamendo]);
+
+  const orderedPhotoNodes = getOrderedPhotoNodes(nodes, connections);
+
+  useEffect(() => {
+    setPreviewIndex(0);
+    setPreviewNextIndex(0);
+    setPreviewTransitioning(false);
+  }, [orderedPhotoNodes.length]);
+
+  useEffect(() => {
+    if (orderedPhotoNodes.length <= 1) return;
+    previewIntervalRef.current = setInterval(() => {
+      setPreviewNextIndex((i) => (i + 1) % orderedPhotoNodes.length);
+      setPreviewTransitioning(true);
+    }, PREVIEW_DURATION_MS);
+    return () => {
+      if (previewIntervalRef.current) clearInterval(previewIntervalRef.current);
+      if (previewTransitionTimeoutRef.current) clearTimeout(previewTransitionTimeoutRef.current);
+    };
+  }, [orderedPhotoNodes.length]);
+
+  useEffect(() => {
+    if (!previewTransitioning || orderedPhotoNodes.length <= 1) return;
+    previewTransitionTimeoutRef.current = setTimeout(() => {
+      setPreviewIndex(previewNextIndex);
+      setPreviewTransitioning(false);
+      previewTransitionTimeoutRef.current = null;
+    }, CROSSFADE_DURATION_MS);
+    return () => {
+      if (previewTransitionTimeoutRef.current) clearTimeout(previewTransitionTimeoutRef.current);
+    };
+  }, [previewTransitioning, previewNextIndex, orderedPhotoNodes.length]);
+
+  const handleDownloadVideo = useCallback(async () => {
+    if (orderedPhotoNodes.length === 0) return;
+    setDownloading(true);
+    let audioSource: AudioBufferSourceNode | null = null;
+    let audioCtx: AudioContext | null = null;
+    try {
+      const durationPerFrame = PREVIEW_DURATION_MS / 1000;
+      const width = 1280;
+      const height = 720;
+      const fps = 30;
+
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) throw new Error("Canvas not supported");
+      const canvasCtx: CanvasRenderingContext2D = ctx;
+
+      const images: HTMLImageElement[] = [];
+      for (const node of orderedPhotoNodes) {
+        if (!node.imageUrl) continue;
+        const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+          const el = new Image();
+          el.crossOrigin = "anonymous";
+          el.onload = () => resolve(el);
+          el.onerror = () => reject(new Error("Image load failed"));
+          el.src = node.imageUrl!;
+        });
+        images.push(img);
+      }
+      if (images.length === 0) throw new Error("No images");
+
+      const videoStream = canvas.captureStream(fps);
+      let stream: MediaStream = videoStream;
+
+      if (selectedBgm?.id) {
+        const audioRes = await fetch(`/api/jamendo/audio/${encodeURIComponent(selectedBgm.id)}`);
+        if (!audioRes.ok) throw new Error("BGM을 불러올 수 없어요.");
+        const arrayBuffer = await audioRes.arrayBuffer();
+        audioCtx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
+        const decoded = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
+        const dest = audioCtx.createMediaStreamDestination();
+        audioSource = audioCtx.createBufferSource();
+        audioSource.buffer = decoded;
+        audioSource.loop = true;
+        audioSource.connect(dest);
+        stream = new MediaStream([
+          ...videoStream.getVideoTracks(),
+          ...dest.stream.getAudioTracks(),
+        ]);
+      }
+
+      const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9")
+        ? "video/webm;codecs=vp9"
+        : "video/webm";
+      const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 2500000 });
+      const chunks: Blob[] = [];
+      recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+      recorder.onstop = () => {
+        const blob = new Blob(chunks, { type: mimeType });
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = `영상-${Date.now()}.webm`;
+        a.click();
+        URL.revokeObjectURL(a.href);
+        setDownloading(false);
+      };
+
+      recorder.start(100);
+      const startTime = performance.now();
+      const totalDuration = images.length * durationPerFrame;
+      const crossfadeDurationSec = CROSSFADE_DURATION_MS / 1000;
+      if (audioSource) audioSource.start(0);
+
+      function drawImageScaled(img: HTMLImageElement, alpha: number) {
+        canvasCtx.save();
+        canvasCtx.globalAlpha = alpha;
+        const scale = Math.max(width / img.width, height / img.height);
+        const sw = width / scale;
+        const sh = height / scale;
+        canvasCtx.drawImage(img, (img.width - sw) / 2, (img.height - sh) / 2, sw, sh, 0, 0, width, height);
+        canvasCtx.restore();
+      }
+
+      function draw() {
+        const elapsed = (performance.now() - startTime) / 1000;
+        if (elapsed >= totalDuration) {
+          if (audioSource) {
+            try {
+              audioSource.stop(0);
+            } catch {
+              // ignore
+            }
+          }
+          if (audioCtx) audioCtx.close();
+          recorder.stop();
+          return;
+        }
+        const slotIndex = Math.min(Math.floor(elapsed / durationPerFrame), images.length - 1);
+        const tInSlot = elapsed - slotIndex * durationPerFrame;
+        const currentImg = images[slotIndex];
+        const nextImg = images[(slotIndex + 1) % images.length];
+
+        canvasCtx.fillStyle = "#000";
+        canvasCtx.fillRect(0, 0, width, height);
+
+        if (tInSlot < durationPerFrame - crossfadeDurationSec) {
+          drawImageScaled(currentImg, 1);
+        } else {
+          const crossfadeProgress = (tInSlot - (durationPerFrame - crossfadeDurationSec)) / crossfadeDurationSec;
+          drawImageScaled(currentImg, 1 - crossfadeProgress);
+          drawImageScaled(nextImg, crossfadeProgress);
+        }
+        requestAnimationFrame(draw);
+      }
+      draw();
+    } catch (err) {
+      console.error(err);
+      alert("영상 만들기에 실패했어요. 이미지 주소가 만료됐거나 CORS 제한일 수 있어요.");
+      setDownloading(false);
+    }
+  }, [orderedPhotoNodes, selectedBgm]);
+
   const handleDragStart = (nodeId: string) => {
     setDraggingNodeId(nodeId);
     const node = nodes.find((n) => n.id === nodeId);
@@ -180,6 +523,75 @@ export function WorkflowBuilder({ userId }: { userId: string }) {
   const handleDragEnd = () => {
     setDraggingNodeId(null);
     dragStartPosition.current = null;
+  };
+
+  const handleDeleteNode = (nodeId: string) => {
+    if (!window.confirm("이 노드를 삭제할까요? 연결도 함께 정리돼요.")) return;
+
+    setNodes((prevNodes) => prevNodes.filter((n) => n.id !== nodeId));
+    setConnections((prevConnections) => {
+      const incoming = prevConnections.filter((c) => c.to === nodeId);
+      const outgoing = prevConnections.filter((c) => c.from === nodeId);
+
+      // 기존에 nodeId와 연결된 간선은 모두 제거
+      const remaining = prevConnections.filter((c) => c.from !== nodeId && c.to !== nodeId);
+
+      if (incoming.length === 0 || outgoing.length === 0) {
+        return remaining;
+      }
+
+      // 가장 단순하게: 첫 번째 들어오는 노드와 첫 번째 나가는 노드를 다시 연결
+      const fromId = incoming[0].from;
+      const toId = outgoing[0].to;
+
+      if (!fromId || !toId || fromId === toId) {
+        return remaining;
+      }
+
+      const alreadyExists = remaining.some((c) => c.from === fromId && c.to === toId);
+      if (alreadyExists) {
+        return remaining;
+      }
+
+      return [...remaining, { from: fromId, to: toId }];
+    });
+  };
+
+  const handleCanvasMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return; // only left click
+    e.preventDefault();
+    setIsPanning(true);
+    panStartRef.current = { x: e.clientX, y: e.clientY };
+    panStartOffsetRef.current = { ...viewportOffset };
+  };
+
+  const handleCanvasMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!isPanning || !panStartRef.current || !panStartOffsetRef.current) return;
+    const dx = e.clientX - panStartRef.current.x;
+    const dy = e.clientY - panStartRef.current.y;
+    setViewportOffset({
+      x: panStartOffsetRef.current.x + dx,
+      y: panStartOffsetRef.current.y + dy,
+    });
+  };
+
+  const endPan = () => {
+    if (!isPanning) return;
+    setIsPanning(false);
+    panStartRef.current = null;
+    panStartOffsetRef.current = null;
+  };
+
+  const handleCanvasWheel = (e: React.WheelEvent<HTMLDivElement>) => {
+    // 캔버스 안에서만 확대/축소되도록 기본 스크롤 막기
+    e.preventDefault();
+    e.stopPropagation();
+    const delta = -e.deltaY;
+    const factor = delta > 0 ? 1.08 : 0.92;
+    setZoom((z) => {
+      const next = Math.min(2.5, Math.max(0.4, z * factor));
+      return next;
+    });
   };
 
   const openAddNodePicker = () => {
@@ -211,10 +623,6 @@ export function WorkflowBuilder({ userId }: { userId: string }) {
       height: Math.max(prev.height, newPosition.y + NODE_HEIGHT + 50),
     }));
     setPhotoPickerOpen(null);
-    const canvas = canvasRef.current;
-    if (canvas) {
-      canvas.scrollTo({ left: newPosition.x + NODE_WIDTH - canvas.clientWidth + 100, behavior: "smooth" });
-    }
   };
 
   const setNodePhoto = (nodeId: string, imageUrl: string, imagePath: string) => {
@@ -234,50 +642,148 @@ export function WorkflowBuilder({ userId }: { userId: string }) {
   return (
     <div className="min-h-screen w-full bg-white">
       <div className="border-b border-zinc-100 bg-white px-6 py-4">
-        <div className="mx-auto flex max-w-6xl items-center justify-between">
+        <div className="mx-auto flex max-w-8xl">
           <Link
             href="/"
             className="text-sm font-semibold tracking-wide text-zinc-600 hover:text-zinc-900"
           >
             ← 메인으로
           </Link>
-          <span className="text-sm font-semibold uppercase tracking-wider text-zinc-500">
-            영상 제작
-          </span>
         </div>
       </div>
 
-      <div className="mx-auto max-w-6xl p-4 sm:p-6">
-        <div className="rounded-2xl border border-zinc-200 bg-zinc-50/50 p-4 sm:p-6">
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <span className="rounded-full border border-emerald-400/40 bg-emerald-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-wider text-emerald-600">
-                Active
-              </span>
-              <span className="text-xs uppercase tracking-wider text-zinc-500">Workflow Builder</span>
+      <div className="flex w-full gap-6 px-6 py-4 sm:py-6">
+        {/* 왼쪽: 영상 미리보기 + 다운로드 */}
+        <aside className="flex w-full shrink-0 flex-col lg:w-[480px] xl:w-[520px] lg:justify-center">
+          <audio
+            ref={previewAudioRef}
+            loop
+            playsInline
+            className="hidden"
+            aria-label={selectedBgm ? `BGM: ${selectedBgm.name}` : "BGM"}
+          />
+          <div className="rounded-2xl border border-zinc-200 bg-zinc-50/50 p-2">
+            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-zinc-600">영상 미리보기</h2>
+            <div className="relative aspect-video min-h-[340px] w-full overflow-hidden rounded-xl border border-zinc-200 bg-black sm:min-h-[460px] md:min-h-[500px] lg:min-h-[560px]">
+              {orderedPhotoNodes.length === 0 ? (
+                <div className="flex h-full w-full items-center justify-center text-zinc-500">
+                  <p className="text-center text-sm">노드를 추가하면<br />연결 순서대로 여기에 표시돼요</p>
+                </div>
+              ) : (
+                <>
+                  {/* 현재 프레임 — 전환 중이면 서서히 사라짐 */}
+                  <img
+                    key={`current-${orderedPhotoNodes[previewIndex]?.id}`}
+                    src={orderedPhotoNodes[previewIndex % orderedPhotoNodes.length]?.imageUrl}
+                    alt=""
+                    className="absolute inset-0 h-full w-full object-contain transition-opacity ease-out"
+                    style={{
+                      opacity: previewTransitioning ? 0 : 1,
+                      transitionDuration: `${CROSSFADE_DURATION_MS}ms`,
+                    }}
+                  />
+                  {/* 다음 프레임 — 전환 중이면 서서히 나타남 */}
+                  <img
+                    key={`next-${orderedPhotoNodes[previewNextIndex]?.id}`}
+                    src={orderedPhotoNodes[previewNextIndex % orderedPhotoNodes.length]?.imageUrl}
+                    alt=""
+                    className="absolute inset-0 h-full w-full object-contain transition-opacity ease-out"
+                    style={{
+                      opacity: previewTransitioning ? 1 : 0,
+                      transitionDuration: `${CROSSFADE_DURATION_MS}ms`,
+                    }}
+                  />
+                </>
+              )}
             </div>
-            <button
-              type="button"
-              onClick={openAddNodePicker}
-              className="flex h-8 items-center gap-2 rounded-lg border border-zinc-200 bg-white px-3 text-xs font-medium uppercase tracking-wider text-zinc-700 transition hover:bg-zinc-50"
-            >
-              <Plus className="h-3.5 w-3.5" />
-              노드 추가 (사진 선택)
-            </button>
+            {orderedPhotoNodes.length > 1 && (
+              <p className="mt-2 text-center text-xs text-zinc-500">
+                {previewIndex + 1} / {orderedPhotoNodes.length} (자동 재생)
+              </p>
+            )}
+            <div className="mt-4 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-medium uppercase tracking-wider text-zinc-500">BGM</span>
+                {selectedBgm ? (
+                  <div className="flex min-w-0 flex-1 items-center justify-end gap-2">
+                    <span className="truncate text-right text-sm text-zinc-700" title={`${selectedBgm.name} - ${selectedBgm.artist_name}`}>
+                      {selectedBgm.name} · {selectedBgm.artist_name}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedBgm(null)}
+                      className="shrink-0 rounded border border-zinc-200 bg-white px-2 py-0.5 text-xs text-zinc-600 hover:bg-zinc-50"
+                    >
+                      제거
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setMusicPickerOpen(true)}
+                    className="flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 transition hover:bg-zinc-50"
+                  >
+                    <Music className="h-3.5 w-3.5" />
+                    BGM 선택
+                  </button>
+                )}
+              </div>
+              <button
+                type="button"
+                disabled={orderedPhotoNodes.length === 0 || downloading}
+                onClick={handleDownloadVideo}
+                className="flex w-full items-center justify-center gap-2 rounded-xl border border-zinc-200 bg-white py-3 text-sm font-medium text-zinc-800 transition hover:bg-zinc-50 disabled:opacity-50"
+              >
+                <Download className="h-4 w-4" />
+                {downloading ? "영상 만드는 중…" : "영상 다운로드 (WebM)"}
+              </button>
+            </div>
           </div>
+        </aside>
 
-          <div
-            ref={canvasRef}
-            className="relative h-[400px] w-full overflow-auto rounded-xl border border-zinc-200 bg-white sm:h-[500px] md:h-[600px]"
-            style={{ minHeight: "400px" }}
-            role="region"
-            aria-label="Workflow canvas"
-            tabIndex={0}
-          >
+        {/* 오른쪽: 노드 캔버스 */}
+        <div className="min-w-0 flex-1">
+          <div className="rounded-2xl border border-zinc-200 bg-zinc-50/50 p-4 sm:p-6">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <span className="rounded-full border border-emerald-400/40 bg-emerald-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-wider text-emerald-600">
+                  Active
+                </span>
+                <span className="text-xs uppercase tracking-wider text-zinc-500">Workflow Builder</span>
+              </div>
+              <button
+                type="button"
+                onClick={openAddNodePicker}
+                className="flex h-8 items-center gap-2 rounded-lg border border-zinc-200 bg-white px-3 text-xs font-medium uppercase tracking-wider text-zinc-700 transition hover:bg-zinc-50"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                노드 추가 (사진 선택)
+              </button>
+            </div>
+
             <div
-              className="relative"
-              style={{ minWidth: contentSize.width, minHeight: contentSize.height }}
+              ref={canvasRef}
+              className="relative h-[520px] w-full overflow-hidden rounded-xl border border-zinc-200 bg-white sm:h-[640px] md:h-[760px] lg:h-[820px]"
+              style={{ minHeight: "500px" }}
+              role="region"
+              aria-label="Workflow canvas"
+              tabIndex={0}
+              onMouseDown={handleCanvasMouseDown}
+              onMouseMove={handleCanvasMouseMove}
+              onMouseUp={endPan}
+              onMouseLeave={endPan}
+              onWheel={handleCanvasWheel}
             >
+              <div
+                className="relative"
+                style={{
+                  minWidth: contentSize.width,
+                  minHeight: contentSize.height,
+                  transform: `translate(${viewportOffset.x}px, ${viewportOffset.y}px) scale(${zoom})`,
+                  transformOrigin: "0 0",
+                  cursor: isPanning ? "grabbing" : "grab",
+                }}
+              >
               <svg
                 className="pointer-events-none absolute left-0 top-0"
                 width={contentSize.width}
@@ -312,13 +818,17 @@ export function WorkflowBuilder({ userId }: { userId: string }) {
                     onDragStart={() => handleDragStart(node.id)}
                     onDrag={(_, info) => handleDrag(node.id, info)}
                     onDragEnd={handleDragEnd}
+                    onMouseDown={(e) => {
+                      e.stopPropagation();
+                    }}
                     style={{
                       x: node.position.x,
                       y: node.position.y,
                       width: NODE_WIDTH,
                       transformOrigin: "0 0",
                     }}
-                    className="absolute cursor-grab"
+                    className="absolute cursor-grab active:cursor-grabbing"
+                    title="드래그해서 이동"
                     initial={{ scale: 0.8, opacity: 0 }}
                     animate={{ scale: 1, opacity: 1 }}
                     transition={{ duration: 0.2 }}
@@ -330,12 +840,25 @@ export function WorkflowBuilder({ userId }: { userId: string }) {
                         isDragging ? "ring-2 ring-zinc-400 shadow-xl" : ""
                       } ${colorClasses[node.color]}`}
                     >
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDeleteNode(node.id);
+                        }}
+                        className="absolute right-1.5 top-1.5 z-10 flex h-6 w-6 items-center justify-center rounded-full bg-black/50 text-white opacity-0 transition-opacity group-hover/node:opacity-100 hover:bg-black/70"
+                        aria-label="노드 삭제"
+                      >
+                        <span className="text-xs leading-none">×</span>
+                      </button>
                       {node.imageUrl ? (
                         <div className="relative aspect-video w-full overflow-hidden rounded-lg bg-zinc-100">
                           <img
                             src={node.imageUrl}
                             alt=""
                             className="h-full w-full object-cover"
+                            draggable={false}
+                            onDragStart={(e) => e.preventDefault()}
                           />
                           <button
                             type="button"
@@ -412,6 +935,7 @@ export function WorkflowBuilder({ userId }: { userId: string }) {
             </p>
           </div>
         </div>
+        </div>
       </div>
 
       {photoPickerOpen && (
@@ -466,6 +990,75 @@ export function WorkflowBuilder({ userId }: { userId: string }) {
               <button
                 type="button"
                 onClick={() => setPhotoPickerOpen(null)}
+                className="w-full rounded-lg border border-zinc-200 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50"
+              >
+                닫기
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {musicPickerOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setMusicPickerOpen(false)}
+        >
+          <div
+            className="flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="border-b border-zinc-100 p-4">
+              <h2 className="text-lg font-semibold text-zinc-900">BGM 선택 (Jamendo)</h2>
+              <p className="mt-1 text-sm text-zinc-500">
+                검색어를 입력하면 무료 음원 목록이 나와요. 곡을 선택하면 영상 다운로드 시 함께 넣어집니다.
+              </p>
+              <input
+                type="text"
+                value={musicSearch}
+                onChange={(e) => setMusicSearch(e.target.value)}
+                placeholder="곡명, 아티스트 검색…"
+                className="mt-3 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-300"
+              />
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto p-4">
+              {musicLoading ? (
+                <p className="py-8 text-center text-sm text-zinc-500">검색 중…</p>
+              ) : musicResults.length === 0 ? (
+                <p className="py-8 text-center text-sm text-zinc-500">
+                  {musicSearch.trim() ? "검색 결과가 없어요." : "검색어를 입력해 보세요."}
+                </p>
+              ) : (
+                <ul className="space-y-2">
+                  {musicResults.map((track) => (
+                    <li key={track.id}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedBgm(track);
+                          setMusicPickerOpen(false);
+                        }}
+                        className="flex w-full items-center gap-3 rounded-xl border border-zinc-200 bg-zinc-50/50 p-3 text-left transition hover:border-zinc-300 hover:bg-zinc-100"
+                      >
+                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-zinc-200 text-zinc-500">
+                          <Music className="h-5 w-5" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate font-medium text-zinc-900">{track.name}</p>
+                          <p className="truncate text-xs text-zinc-500">{track.artist_name}</p>
+                        </div>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <div className="border-t border-zinc-100 p-4">
+              <button
+                type="button"
+                onClick={() => setMusicPickerOpen(false)}
                 className="w-full rounded-lg border border-zinc-200 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50"
               >
                 닫기

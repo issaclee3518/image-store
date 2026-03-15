@@ -34,3 +34,13 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+
+## Jamendo BGM (영상 제작)
+
+영상 제작 워크플로에서 BGM을 넣으려면 [Jamendo Developer](https://developer.jamendo.com/)에서 앱을 등록한 뒤 **Client ID**를 발급받아 `.env.local`에 추가하세요:
+
+```bash
+JAMENDO_CLIENT_ID=your_client_id
+```
+
+설정하지 않으면 BGM 검색/선택은 동작하지 않으며, 영상 다운로드는 기존처럼 음원 없이 가능합니다.
