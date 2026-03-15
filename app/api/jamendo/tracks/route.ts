@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
+export const runtime = "edge";
+
 const JAMENDO_BASE = "https://api.jamendo.com/v3.0/tracks";
 
 export async function GET(request: NextRequest) {
