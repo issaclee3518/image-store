@@ -1,6 +1,7 @@
 # Cloudflare Pages – compatibility flags for Functions (e.g. Node.js APIs)
 # See: https://developers.cloudflare.com/pages/functions/wrangler-configuration/
 name = "image-store"
-pages_build_output_dir = ".next"
+# next-on-pages writes deployable output here (not .next, which contains large cache)
+pages_build_output_dir = ".vercel/output/static"
 compatibility_date = "2024-09-23"
 compatibility_flags = ["nodejs_compat"]
