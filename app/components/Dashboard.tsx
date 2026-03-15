@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { IMAGES_BUCKET } from "@/lib/supabase/storage";
 import type { User } from "@supabase/supabase-js";
@@ -30,6 +30,7 @@ type ImageItem = {
 type CategoryRow = { id: string; name: string };
 
 export function Dashboard() {
+  const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
   const [categories, setCategories] = useState<CategoryRow[]>([]);
   const [selectedCategoryId, setSelectedCategoryId] = useState<string>(ALL_ID);
@@ -375,12 +376,12 @@ export function Dashboard() {
                   : categories.find((c) => c.id === selectedCategoryId)?.name ?? "사진"}
             </h1>
             <div className="flex flex-wrap items-center gap-3">
-              <Link
-                href="/workflow"
-                className="rounded-full border border-zinc-200 bg-white px-5 py-2.5 text-sm font-medium text-zinc-700 transition hover:bg-zinc-50"
-              >
-                영상 제작
-              </Link>
+              <InteractiveHoverButton
+                type="button"
+                onClick={() => router.push("/?view=workflow")}
+                text="영상 제작"
+                className="min-w-[8rem] px-5 py-2.5"
+              />
               <InteractiveHoverButton
                 type="button"
                 onClick={() => setUploadOpen(true)}

@@ -4,7 +4,7 @@ import { motion, type PanInfo } from "framer-motion";
 import type React from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   ArrowRight,
   Database,
@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { IMAGES_BUCKET } from "@/lib/supabase/storage";
+import { InteractiveHoverButton } from "./InteractiveHoverButton";
 
 const SIGNED_URL_EXPIRE_SEC = 3600;
 const NODE_WIDTH = 200;
@@ -149,6 +150,7 @@ function getOrderedPhotoNodes(nodes: WorkflowNode[], connections: WorkflowConnec
 }
 
 export function WorkflowBuilder({ userId }: { userId: string }) {
+  const router = useRouter();
   const [nodes, setNodes] = useState<WorkflowNode[]>(initialNodes);
   const [connections, setConnections] = useState<WorkflowConnection[]>(initialConnections);
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -376,73 +378,97 @@ export function WorkflowBuilder({ userId }: { userId: string }) {
     };
   }, [previewTransitioning, previewNextIndex, orderedPhotoNodes.length]);
 
-  const handleDownloadVideo = useCallback(async () => {
-    if (orderedPhotoNodes.length === 0) return;
-    setDownloading(true);
-    let audioSource: AudioBufferSourceNode | null = null;
-    let audioCtx: AudioContext | null = null;
-    try {
-      const durationPerFrame = PREVIEW_DURATION_MS / 1000;
-      const width = 1280;
-      const height = 720;
-      const fps = 30;
+  const handleDownloadVideo = useCallback(
+    async (format: "webm" | "mp4") => {
+      if (orderedPhotoNodes.length === 0) return;
+      const mp4Native = format === "mp4" && MediaRecorder.isTypeSupported("video/mp4");
+      const recordAsWebm = format === "webm" || !mp4Native; // MP4 요청이어도 미지원 시 WebM으로 녹화 후 변환
+      setDownloading(true);
+      let audioSource: AudioBufferSourceNode | null = null;
+      let audioCtx: AudioContext | null = null;
+      try {
+        const durationPerFrame = PREVIEW_DURATION_MS / 1000;
+        const width = 1280;
+        const height = 720;
+        const fps = 30;
 
-      const canvas = document.createElement("canvas");
-      canvas.width = width;
-      canvas.height = height;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) throw new Error("Canvas not supported");
-      const canvasCtx: CanvasRenderingContext2D = ctx;
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) throw new Error("Canvas not supported");
+        const canvasCtx: CanvasRenderingContext2D = ctx;
 
-      const images: HTMLImageElement[] = [];
-      for (const node of orderedPhotoNodes) {
-        if (!node.imageUrl) continue;
-        const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-          const el = new Image();
-          el.crossOrigin = "anonymous";
-          el.onload = () => resolve(el);
-          el.onerror = () => reject(new Error("Image load failed"));
-          el.src = node.imageUrl!;
-        });
-        images.push(img);
-      }
-      if (images.length === 0) throw new Error("No images");
+        const images: HTMLImageElement[] = [];
+        for (const node of orderedPhotoNodes) {
+          if (!node.imageUrl) continue;
+          const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+            const el = new Image();
+            el.crossOrigin = "anonymous";
+            el.onload = () => resolve(el);
+            el.onerror = () => reject(new Error("Image load failed"));
+            el.src = node.imageUrl!;
+          });
+          images.push(img);
+        }
+        if (images.length === 0) throw new Error("No images");
 
-      const videoStream = canvas.captureStream(fps);
-      let stream: MediaStream = videoStream;
+        const videoStream = canvas.captureStream(fps);
+        let stream: MediaStream = videoStream;
 
-      if (selectedBgm?.id) {
-        const audioRes = await fetch(`/api/jamendo/audio/${encodeURIComponent(selectedBgm.id)}`);
-        if (!audioRes.ok) throw new Error("BGM을 불러올 수 없어요.");
-        const arrayBuffer = await audioRes.arrayBuffer();
-        audioCtx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
-        const decoded = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
-        const dest = audioCtx.createMediaStreamDestination();
-        audioSource = audioCtx.createBufferSource();
-        audioSource.buffer = decoded;
-        audioSource.loop = true;
-        audioSource.connect(dest);
-        stream = new MediaStream([
-          ...videoStream.getVideoTracks(),
-          ...dest.stream.getAudioTracks(),
-        ]);
-      }
+        if (selectedBgm?.id) {
+          const audioRes = await fetch(`/api/jamendo/audio/${encodeURIComponent(selectedBgm.id)}`);
+          if (!audioRes.ok) throw new Error("BGM을 불러올 수 없어요.");
+          const arrayBuffer = await audioRes.arrayBuffer();
+          audioCtx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
+          const decoded = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
+          const dest = audioCtx.createMediaStreamDestination();
+          audioSource = audioCtx.createBufferSource();
+          audioSource.buffer = decoded;
+          audioSource.loop = true;
+          audioSource.connect(dest);
+          stream = new MediaStream([
+            ...videoStream.getVideoTracks(),
+            ...dest.stream.getAudioTracks(),
+          ]);
+        }
 
-      const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9")
-        ? "video/webm;codecs=vp9"
-        : "video/webm";
-      const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 2500000 });
-      const chunks: Blob[] = [];
-      recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
-      recorder.onstop = () => {
-        const blob = new Blob(chunks, { type: mimeType });
-        const a = document.createElement("a");
-        a.href = URL.createObjectURL(blob);
-        a.download = `영상-${Date.now()}.webm`;
-        a.click();
-        URL.revokeObjectURL(a.href);
-        setDownloading(false);
-      };
+        const mimeType = recordAsWebm
+          ? MediaRecorder.isTypeSupported("video/webm;codecs=vp9")
+            ? "video/webm;codecs=vp9"
+            : "video/webm"
+          : "video/mp4";
+        const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 2500000 });
+        const chunks: Blob[] = [];
+        recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+        recorder.onstop = async () => {
+          const blob = new Blob(chunks, { type: mimeType });
+          try {
+            let downloadBlob = blob;
+            let extension = format;
+            if (format === "mp4" && recordAsWebm) {
+              const { FFmpeg } = await import("@ffmpeg/ffmpeg");
+              const ffmpeg = new FFmpeg();
+              await ffmpeg.load();
+              await ffmpeg.writeFile("input.webm", new Uint8Array(await blob.arrayBuffer()));
+              await ffmpeg.exec(["-i", "input.webm", "-c:v", "libx264", "-preset", "fast", "-crf", "23", "-c:a", "aac", "output.mp4"]);
+              const data = await ffmpeg.readFile("output.mp4");
+              const arr = data instanceof Uint8Array ? new Uint8Array(data) : new Uint8Array(0);
+              downloadBlob = new Blob([arr], { type: "video/mp4" });
+              extension = "mp4";
+            }
+            const a = document.createElement("a");
+            a.href = URL.createObjectURL(downloadBlob);
+            a.download = `영상-${Date.now()}.${extension}`;
+            a.click();
+            URL.revokeObjectURL(a.href);
+          } catch (err) {
+            console.error(err);
+            if (format === "mp4" && recordAsWebm) alert("MP4 변환에 실패했어요. WebM으로 다시 시도해 주세요.");
+          } finally {
+            setDownloading(false);
+          }
+        };
 
       recorder.start(100);
       const startTime = performance.now();
@@ -497,7 +523,9 @@ export function WorkflowBuilder({ userId }: { userId: string }) {
       alert("영상 만들기에 실패했어요. 이미지 주소가 만료됐거나 CORS 제한일 수 있어요.");
       setDownloading(false);
     }
-  }, [orderedPhotoNodes, selectedBgm]);
+  },
+    [orderedPhotoNodes, selectedBgm],
+  );
 
   const handleDragStart = (nodeId: string) => {
     setDraggingNodeId(nodeId);
@@ -643,12 +671,13 @@ export function WorkflowBuilder({ userId }: { userId: string }) {
     <div className="min-h-screen w-full bg-white">
       <div className="border-b border-zinc-100 bg-white px-6 py-4">
         <div className="mx-auto flex max-w-8xl">
-          <Link
-            href="/"
-            className="text-sm font-semibold tracking-wide text-zinc-600 hover:text-zinc-900"
-          >
-            ← 메인으로
-          </Link>
+          <InteractiveHoverButton
+            type="button"
+            onClick={() => router.push("/")}
+            text="메인으로"
+            back
+            className="px-4 py-2 text-sm"
+          />
         </div>
       </div>
 
@@ -728,15 +757,26 @@ export function WorkflowBuilder({ userId }: { userId: string }) {
                   </button>
                 )}
               </div>
-              <button
-                type="button"
-                disabled={orderedPhotoNodes.length === 0 || downloading}
-                onClick={handleDownloadVideo}
-                className="flex w-full items-center justify-center gap-2 rounded-xl border border-zinc-200 bg-white py-3 text-sm font-medium text-zinc-800 transition hover:bg-zinc-50 disabled:opacity-50"
-              >
-                <Download className="h-4 w-4" />
-                {downloading ? "영상 만드는 중…" : "영상 다운로드 (WebM)"}
-              </button>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  disabled={orderedPhotoNodes.length === 0 || downloading}
+                  onClick={() => handleDownloadVideo("webm")}
+                  className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-zinc-200 bg-white py-3 text-sm font-medium text-zinc-800 transition hover:bg-zinc-50 disabled:opacity-50"
+                >
+                  <Download className="h-4 w-4" />
+                  {downloading ? "만드는 중…" : "WebM"}
+                </button>
+                <button
+                  type="button"
+                  disabled={orderedPhotoNodes.length === 0 || downloading}
+                  onClick={() => handleDownloadVideo("mp4")}
+                  className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-zinc-200 bg-white py-3 text-sm font-medium text-zinc-800 transition hover:bg-zinc-50 disabled:opacity-50"
+                >
+                  <Download className="h-4 w-4" />
+                  {downloading ? "만드는 중…" : "MP4"}
+                </button>
+              </div>
             </div>
           </div>
         </aside>

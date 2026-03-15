@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import type { User } from "@supabase/supabase-js";
 import { PhotoUploadModal } from "./PhotoUploadModal";
@@ -9,14 +9,25 @@ import { InteractiveHoverButton } from "./InteractiveHoverButton";
 import { LoginModal } from "./LoginModal";
 
 export function HeroSection() {
+  const router = useRouter();
   const [uploadOpen, setUploadOpen] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
+  const [redirectToWorkflowAfterLogin, setRedirectToWorkflowAfterLogin] = useState(false);
   const [user, setUser] = useState<User | null>(null);
   const supabase = createClient();
 
   useEffect(() => {
-    supabase.auth.getUser().then(({ data: { user: u } }) => setUser(u ?? null));
-  }, [supabase]);
+    supabase.auth.getUser().then(({ data: { user: u } }) => {
+      setUser(u ?? null);
+      if (u && typeof window !== "undefined") {
+        const redirect = sessionStorage.getItem("redirectAfterLogin");
+        if (redirect) {
+          sessionStorage.removeItem("redirectAfterLogin");
+          router.push(redirect);
+        }
+      }
+    });
+  }, [supabase, router]);
 
   return (
     <>
@@ -48,12 +59,20 @@ export function HeroSection() {
               text="사진 올리기"
               className="min-w-[10rem] px-7 py-3"
             />
-            <Link
-              href="/workflow"
-              className="flex items-center justify-center rounded-full border border-zinc-200 bg-white px-7 py-3 text-sm font-medium text-zinc-800 transition hover:border-zinc-300 hover:bg-zinc-50 active:bg-zinc-100"
-            >
-              영상 제작
-            </Link>
+            <InteractiveHoverButton
+              type="button"
+              onClick={() => {
+                if (user) {
+                  router.push("/?view=workflow");
+                } else {
+                  setRedirectToWorkflowAfterLogin(true);
+                  if (typeof window !== "undefined") sessionStorage.setItem("redirectAfterLogin", "/?view=workflow");
+                  setLoginOpen(true);
+                }
+              }}
+              text="영상 제작"
+              className="min-w-[10rem] px-7 py-3"
+            />
           </div>
           <div className="mt-4 flex flex-wrap gap-4 text-xs text-zinc-500">
             <span>무료로 시작</span>
@@ -89,10 +108,20 @@ export function HeroSection() {
       />
       <LoginModal
         isOpen={loginOpen}
-        onClose={() => setLoginOpen(false)}
+        onClose={() => {
+          setLoginOpen(false);
+          setRedirectToWorkflowAfterLogin(false);
+          if (typeof window !== "undefined") sessionStorage.removeItem("redirectAfterLogin");
+        }}
         onSuccess={() => {
           setLoginOpen(false);
-          supabase.auth.getUser().then(({ data: { user: u } }) => setUser(u ?? null));
+          supabase.auth.getUser().then(({ data: { user: u } }) => {
+            setUser(u ?? null);
+            if (redirectToWorkflowAfterLogin && u) {
+              setRedirectToWorkflowAfterLogin(false);
+              router.push("/?view=workflow");
+            }
+          });
         }}
       />
     </>
