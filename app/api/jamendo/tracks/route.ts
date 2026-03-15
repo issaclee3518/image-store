@@ -14,17 +14,15 @@ export async function GET(request: NextRequest) {
   }
 
   const { searchParams } = new URL(request.url);
-  const search = searchParams.get("search") ?? "";
+  const search = (searchParams.get("search") ?? "").trim() || "music";
   const limit = Math.min(200, Math.max(1, parseInt(searchParams.get("limit") ?? "20", 10)));
 
   const params = new URLSearchParams({
     client_id: clientId,
     format: "json",
     limit: String(limit),
+    search: search,
   });
-  if (search.trim()) {
-    params.set("search", search.trim());
-  }
 
   try {
     const res = await fetch(`${JAMENDO_BASE}/?${params.toString()}`, {

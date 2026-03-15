@@ -313,16 +313,26 @@ export function WorkflowBuilder({ userId }: { userId: string }) {
     if (photoPickerOpen) loadUserImages();
   }, [photoPickerOpen, loadUserImages]);
 
+  const [musicError, setMusicError] = useState<string | null>(null);
+
   const searchJamendo = useCallback(async (query: string) => {
     setMusicLoading(true);
+    setMusicError(null);
     try {
       const params = new URLSearchParams({ limit: "20" });
-      if (query.trim()) params.set("search", query.trim());
+      const searchTerm = query.trim() || "music";
+      params.set("search", searchTerm);
       const res = await fetch(`/api/jamendo/tracks?${params.toString()}`);
-      if (!res.ok) throw new Error("Failed to fetch tracks");
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({})) as { error?: string };
+        setMusicError(body.error ?? "목록을 불러올 수 없어요.");
+        setMusicResults([]);
+        return;
+      }
       const data = (await res.json()) as { tracks?: BgmTrack[] };
       setMusicResults(data.tracks ?? []);
     } catch {
+      setMusicError("목록을 불러올 수 없어요. 연결을 확인해 주세요.");
       setMusicResults([]);
     } finally {
       setMusicLoading(false);
@@ -331,6 +341,7 @@ export function WorkflowBuilder({ userId }: { userId: string }) {
 
   useEffect(() => {
     if (!musicPickerOpen) return;
+    setMusicError(null);
     const timer = setTimeout(() => searchJamendo(musicSearch), 300);
     return () => clearTimeout(timer);
   }, [musicPickerOpen, musicSearch, searchJamendo]);
@@ -441,7 +452,7 @@ export function WorkflowBuilder({ userId }: { userId: string }) {
               const ffmpeg = new FFmpeg();
               await ffmpeg.load();
               await ffmpeg.writeFile("input.webm", new Uint8Array(await blob.arrayBuffer()));
-              await ffmpeg.exec(["-i", "input.webm", "-c:v", "libx264", "-preset", "fast", "-crf", "23", "-c:a", "aac", "output.mp4"]);
+              await ffmpeg.exec(["-i", "input.webm", "-c:v", "libx264", "-profile:v", "main", "-level", "4.0", "-preset", "fast", "-crf", "23", "-movflags", "+faststart", "-c:a", "aac", "output.mp4"]);
               const data = await ffmpeg.readFile("output.mp4");
               const arr = data instanceof Uint8Array ? new Uint8Array(data) : new Uint8Array(0);
               downloadBlob = new Blob([arr], { type: "video/mp4" });
@@ -1075,7 +1086,9 @@ export function WorkflowBuilder({ userId }: { userId: string }) {
               />
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto p-4">
-              {musicLoading ? (
+              {musicError ? (
+                <p className="py-8 text-center text-sm text-amber-600">{musicError}</p>
+              ) : musicLoading ? (
                 <p className="py-8 text-center text-sm text-zinc-500">검색 중…</p>
               ) : musicResults.length === 0 ? (
                 <p className="py-8 text-center text-sm text-zinc-500">
