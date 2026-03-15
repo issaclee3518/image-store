@@ -134,7 +134,7 @@ export function Dashboard() {
             return {
               path: fullPath,
               url: origUrlData.data.signedUrl,
-              thumbUrl: (thumbUrlData as any)?.data?.signedUrl as string | undefined,
+              thumbUrl: (thumbUrlData as { data?: { signedUrl?: string } })?.data?.signedUrl,
               thumbPath: thumbPath ?? undefined,
               name: item.name,
             } satisfies ImageItem;

@@ -7,15 +7,10 @@ import { flushSync } from "react-dom";
 import { useRouter } from "next/navigation";
 import {
   ArrowRight,
-  Database,
   Download,
   ImagePlus,
-  Mail,
   Music,
   Plus,
-  Settings,
-  Webhook,
-  Zap,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { IMAGES_BUCKET } from "@/lib/supabase/storage";
@@ -41,14 +36,6 @@ interface WorkflowConnection {
   from: string;
   to: string;
 }
-
-const nodeTemplates: Omit<WorkflowNode, "id" | "position" | "imageUrl" | "imagePath">[] = [
-  { type: "trigger", title: "Webhook", description: "Receive data from external service", icon: Webhook, color: "emerald" },
-  { type: "action", title: "Database Query", description: "Fetch user records", icon: Database, color: "blue" },
-  { type: "condition", title: "Condition", description: "Check user status", icon: Settings, color: "amber" },
-  { type: "action", title: "Send Email", description: "Notify user", icon: Mail, color: "purple" },
-  { type: "action", title: "Log Event", description: "Record activity", icon: Zap, color: "indigo" },
-];
 
 const initialNodes: WorkflowNode[] = [];
 const initialConnections: WorkflowConnection[] = [];

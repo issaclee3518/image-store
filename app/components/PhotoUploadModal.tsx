@@ -286,7 +286,7 @@ export function PhotoUploadModal({
             {previewUrls.length > 0 && (
               <div className="mb-4 max-h-48 overflow-y-auto rounded-xl border border-zinc-100 bg-zinc-50 p-3">
                 <ul className="grid grid-cols-4 gap-2">
-                  {previewUrls.map((url, i) => (
+                  {previewUrls.map((url) => (
                     <li key={url} className="aspect-square overflow-hidden rounded-lg bg-zinc-200">
                       <img
                         src={url}
