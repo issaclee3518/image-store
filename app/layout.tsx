@@ -36,10 +36,20 @@ export default function RootLayout({
         />
       </head>
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased bg-white text-zinc-900`}
+        className={`${geistSans.variable} ${geistMono.variable} flex min-h-screen flex-col antialiased bg-white text-zinc-900`}
       >
         <Navbar />
         {children}
+        <footer className="mt-auto border-t border-zinc-100 py-4">
+          <div className="flex justify-center">
+            <a
+              href="/privacy"
+              className="text-xs text-zinc-500 hover:text-zinc-700"
+            >
+              개인정보처리방침
+            </a>
+          </div>
+        </footer>
       </body>
     </html>
   );
