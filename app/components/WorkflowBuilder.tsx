@@ -152,6 +152,8 @@ export function WorkflowBuilder({ userId }: { userId: string }) {
   const [previewNextIndex, setPreviewNextIndex] = useState(0);
   const [previewTransitioning, setPreviewTransitioning] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  /** 완성된 영상 Blob; 사용자가 '다운로드' 버튼을 눌렀을 때만 저장 (사용자 제스처) */
+  const [downloadReady, setDownloadReady] = useState<{ blob: Blob; filename: string } | null>(null);
   const previewIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const previewTransitionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [contentSize, setContentSize] = useState(() => ({
@@ -368,6 +370,7 @@ export function WorkflowBuilder({ userId }: { userId: string }) {
   const handleDownloadVideo = useCallback(
     async (format: "webm" | "mp4") => {
       if (orderedPhotoNodes.length === 0) return;
+      setDownloadReady(null);
       const mp4Native = format === "mp4" && MediaRecorder.isTypeSupported("video/mp4");
       const recordAsWebm = format === "webm" || !mp4Native; // MP4 요청이어도 미지원 시 WebM으로 녹화 후 변환
       setDownloading(true);
@@ -444,11 +447,8 @@ export function WorkflowBuilder({ userId }: { userId: string }) {
               downloadBlob = new Blob([arr], { type: "video/mp4" });
               extension = "mp4";
             }
-            const a = document.createElement("a");
-            a.href = URL.createObjectURL(downloadBlob);
-            a.download = `영상-${Date.now()}.${extension}`;
-            a.click();
-            URL.revokeObjectURL(a.href);
+            const filename = `영상-${Date.now()}.${extension}`;
+            setDownloadReady({ blob: downloadBlob, filename });
           } catch (err) {
             console.error(err);
             if (format === "mp4" && recordAsWebm) alert("MP4 변환에 실패했어요. WebM으로 다시 시도해 주세요.");
@@ -484,6 +484,7 @@ export function WorkflowBuilder({ userId }: { userId: string }) {
             }
           }
           if (audioCtx) audioCtx.close();
+          recorder.requestData();
           recorder.stop();
           return;
         }
@@ -513,6 +514,17 @@ export function WorkflowBuilder({ userId }: { userId: string }) {
   },
     [orderedPhotoNodes, selectedBgm],
   );
+
+  const handleDownloadReadyClick = useCallback(() => {
+    const ready = downloadReady;
+    if (!ready) return;
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(ready.blob);
+    a.download = ready.filename;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    setDownloadReady(null);
+  }, [downloadReady]);
 
   const handleDragStart = (nodeId: string) => {
     setDraggingNodeId(nodeId);
@@ -744,25 +756,37 @@ export function WorkflowBuilder({ userId }: { userId: string }) {
                   </button>
                 )}
               </div>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  disabled={orderedPhotoNodes.length === 0 || downloading}
-                  onClick={() => handleDownloadVideo("webm")}
-                  className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-zinc-200 bg-white py-3 text-sm font-medium text-zinc-800 transition hover:bg-zinc-50 disabled:opacity-50"
-                >
-                  <Download className="h-4 w-4" />
-                  {downloading ? "만드는 중…" : "WebM"}
-                </button>
-                <button
-                  type="button"
-                  disabled={orderedPhotoNodes.length === 0 || downloading}
-                  onClick={() => handleDownloadVideo("mp4")}
-                  className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-zinc-200 bg-white py-3 text-sm font-medium text-zinc-800 transition hover:bg-zinc-50 disabled:opacity-50"
-                >
-                  <Download className="h-4 w-4" />
-                  {downloading ? "만드는 중…" : "MP4"}
-                </button>
+              <div className="flex flex-col gap-2">
+                {downloadReady ? (
+                  <button
+                    type="button"
+                    onClick={handleDownloadReadyClick}
+                    className="flex items-center justify-center gap-2 rounded-xl border border-emerald-500 bg-emerald-500 py-3 text-sm font-medium text-white transition hover:bg-emerald-600"
+                  >
+                    <Download className="h-4 w-4" />
+                    영상 다운로드
+                  </button>
+                ) : null}
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    disabled={orderedPhotoNodes.length === 0 || downloading}
+                    onClick={() => handleDownloadVideo("webm")}
+                    className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-zinc-200 bg-white py-3 text-sm font-medium text-zinc-800 transition hover:bg-zinc-50 disabled:opacity-50"
+                  >
+                    <Download className="h-4 w-4" />
+                    {downloading ? "만드는 중…" : "WebM"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={orderedPhotoNodes.length === 0 || downloading}
+                    onClick={() => handleDownloadVideo("mp4")}
+                    className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-zinc-200 bg-white py-3 text-sm font-medium text-zinc-800 transition hover:bg-zinc-50 disabled:opacity-50"
+                  >
+                    <Download className="h-4 w-4" />
+                    {downloading ? "만드는 중…" : "MP4"}
+                  </button>
+                </div>
               </div>
             </div>
           </div>

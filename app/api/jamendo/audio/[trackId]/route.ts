@@ -52,13 +52,13 @@ export async function GET(
     }
 
     const contentType = audioRes.headers.get("content-type") ?? "audio/mpeg";
-    const blob = await audioRes.arrayBuffer();
-    return new NextResponse(blob, {
-      headers: {
-        "Content-Type": contentType,
-        "Cache-Control": "private, max-age=3600",
-      },
+    const contentLength = audioRes.headers.get("content-length");
+    const headers = new Headers({
+      "Content-Type": contentType,
+      "Cache-Control": "private, max-age=3600",
     });
+    if (contentLength) headers.set("Content-Length", contentLength);
+    return new NextResponse(audioRes.body, { headers });
   } catch (err) {
     console.error("Jamendo audio proxy error:", err);
     return NextResponse.json(
