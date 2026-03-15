@@ -29,6 +29,18 @@ To learn more about Next.js, take a look at the following resources:
 
 You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
 
+## Deploy on Cloudflare Pages
+
+이 프로젝트는 `@cloudflare/next-on-pages`로 Cloudflare Pages에 배포할 수 있습니다. 빌드가 성공하려면 **빌드 시 환경 변수**를 설정하세요.
+
+1. Cloudflare 대시보드 → Pages → 해당 프로젝트 → **Settings** → **Environment variables**
+2. **Build** 환경에 다음 변수 추가:
+   - `NEXT_PUBLIC_SUPABASE_URL` — Supabase 프로젝트 URL
+   - `NEXT_PUBLIC_SUPABASE_ANON_KEY` — Supabase anon key
+   - (선택) `JAMENDO_CLIENT_ID` — 영상 BGM 사용 시
+
+`NEXT_PUBLIC_*` 값은 빌드 시 클라이언트 번들에 포함되므로, 배포 후 로그인·스토리지가 동작하려면 반드시 Build 환경 변수로 설정해야 합니다.
+
 ## Deploy on Vercel
 
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
