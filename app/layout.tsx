@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { Geist, Geist_Mono } from "next/font/google";
 import Script from "next/script";
 import "./globals.css";
@@ -40,14 +41,13 @@ export default function RootLayout({
       >
         <Navbar />
         {children}
-        <footer className="mt-auto border-t border-zinc-100 py-4">
-          <div className="flex justify-center">
-            <a
-              href="/privacy"
-              className="text-xs text-zinc-500 hover:text-zinc-700"
-            >
-              개인정보처리방침
-            </a>
+        <footer className="mt-auto border-t border-zinc-100 py-6">
+          <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-1 text-xs text-zinc-500">
+            <Link href="/about" className="hover:text-zinc-700">About</Link>
+            <Link href="/privacy" className="hover:text-zinc-700">Privacy Policy</Link>
+            <Link href="/contact" className="hover:text-zinc-700">Contact</Link>
+            <Link href="/terms" className="hover:text-zinc-700">Terms</Link>
+            <Link href="/blog" className="hover:text-zinc-700">Blog</Link>
           </div>
         </footer>
       </body>

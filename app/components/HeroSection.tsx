@@ -31,7 +31,7 @@ export function HeroSection() {
 
   return (
     <>
-      <section className="flex flex-1 flex-col gap-10 md:flex-row md:items-center md:justify-between">
+      <section className="flex flex-col gap-10 md:flex-row md:items-center md:justify-between">
         <div className="flex max-w-xl flex-col gap-6 md:max-w-2xl">
           <p className="text-sm font-medium uppercase tracking-[0.2em] text-zinc-500">
             Simple Photo Storage
@@ -42,9 +42,9 @@ export function HeroSection() {
             안전하게 보관하세요.
           </h1>
           <p className="text-base leading-relaxed text-zinc-600 md:text-lg">
-            어디서 찍었든, 어떤 순간이든 한 곳에 모아보세요.
-            <br className="hidden md:block" />
-            브라우저만 있으면 언제든지 빠르게 업로드하고 확인할 수 있어요.
+            Image Store는 브라우저만 있으면 사용할 수 있는 무료 이미지 저장·호스팅 서비스입니다.
+            어디서 찍었든, 어떤 순간이든 한 곳에 모아 두고 카테고리로 정리할 수 있으며,
+            업로드한 사진으로 슬라이드 영상까지 만들 수 있습니다.
           </p>
           <div className="mt-2 flex flex-wrap items-center gap-4">
             <InteractiveHoverButton

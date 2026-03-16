@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import type { User } from "@supabase/supabase-js";
 import { LoginModal } from "./LoginModal";
@@ -32,8 +33,24 @@ export function Navbar() {
     <>
       <header className="border-b border-zinc-100 bg-white/100 backdrop-blur">
         <div className="flex h-16 items-center justify-between px-6 md:px-14">
-          <div className="text-sm font-semibold tracking-[0.18em] uppercase text-zinc-900">
-            Image Store
+          <div className="flex items-center gap-8">
+            <Link
+              href="/"
+              className="text-sm font-semibold tracking-[0.18em] uppercase text-zinc-900 hover:text-zinc-700"
+            >
+              Image Store
+            </Link>
+            <nav className="hidden gap-6 md:flex">
+              <Link href="/about" className="text-sm text-zinc-600 hover:text-zinc-900">
+                소개
+              </Link>
+              <Link href="/blog" className="text-sm text-zinc-600 hover:text-zinc-900">
+                최근 글
+              </Link>
+              <Link href="/contact" className="text-sm text-zinc-600 hover:text-zinc-900">
+                Contact
+              </Link>
+            </nav>
           </div>
 
           {user ? (
